@@ -1,4 +1,4 @@
-package beelog
+package beemport
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Lz-Gustavo/beelog/pb"
+	"github.com/Lz-Gustavo/beemport/pb"
 )
 
 // Dear dev, avoid crash on your IDE by running with:

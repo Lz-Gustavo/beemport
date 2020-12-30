@@ -1,4 +1,4 @@
-package beelog
+package beemport
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Lz-Gustavo/beelog/pb"
+	"github.com/Lz-Gustavo/beemport/pb"
 	"github.com/golang/protobuf/proto"
 )
 

@@ -1,4 +1,4 @@
-module github.com/Lz-Gustavo/beelog
+module github.com/Lz-Gustavo/beemport
 
 go 1.15
 

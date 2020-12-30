@@ -1,4 +1,4 @@
-package beelog
+package beemport
 
 import (
 	"bufio"
@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Lz-Gustavo/beelog/pb"
+	"github.com/Lz-Gustavo/beemport/pb"
 )
 
 const (

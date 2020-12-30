@@ -1,4 +1,4 @@
-package beelog
+package beemport
 
 import (
 	"bytes"
