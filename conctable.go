@@ -38,7 +38,14 @@ type logEvent struct {
 	table, measure int
 }
 
-// minStateTable is a minimal format of the ordinary stateTable, storing only
+// State represents a new state, a command execution happening on a certain
+// consensus index, analogous to a logical clock event.
+type State struct {
+	ind uint64
+	cmd pb.Command
+}
+
+// minStateTable is a minimal format of an ordinary stateTable, storing only
 // the lates state for each key.
 type minStateTable map[string]State
 
