@@ -19,107 +19,45 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-func TestStructuresLog(t *testing.T) {
+func TestConcTableLog(t *testing.T) {
 	first := uint64(1)
 	n := uint64(1000)
-
-	avl := NewAVLTreeHT()
-	lt := NewListHT()
-	arr := NewArrayHT()
-	buf := NewCircBuffHT(context.TODO())
 	ct := NewConcTable(context.TODO())
 
-	for _, st := range []Structure{lt, arr, avl, buf, ct} {
-		// populate some SET commands
-		for i := first; i < n; i++ {
-			err := st.Log(pb.Command{Id: i, Op: pb.Command_SET, Key: strconv.Itoa(int(i))})
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-		}
-		l := st.Len()
-		if l != n-first {
-			t.Log(l, "commands, expected", n-first)
-			t.FailNow()
-		}
-
-		// log another GET
-		err := st.Log(pb.Command{Id: n, Op: pb.Command_GET})
+	// populate some SET commands
+	for i := first; i < n; i++ {
+		err := ct.Log(pb.Command{Id: i, Op: pb.Command_SET, Key: strconv.Itoa(int(i))})
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
 		}
+	}
+	l := ct.Len()
+	if l != n-first {
+		t.Log(l, "commands, expected", n-first)
+		t.FailNow()
+	}
 
-		// GET command shouldnt increase size, but modify 'avl.last' index
-		if l != st.Len() {
-			t.Log(l, "commands, expected", st.Len())
-			t.FailNow()
-		}
+	// log another GET
+	err := ct.Log(pb.Command{Id: n, Op: pb.Command_GET})
+	if err != nil {
+		t.Log(err.Error())
+		t.FailNow()
+	}
 
-		switch tp := st.(type) {
-		case *ListHT:
-			if tp.first != first {
-				// indexes should be 'first' and 'n', considering n-1 SETS + 1 GET
-				t.Log("first cmd index is", tp.first, ", expected", first)
-				t.FailNow()
-			}
-			if tp.last != n {
-				t.Log("last cmd index is", tp.last, ", expected", n)
-				t.FailNow()
-			}
-			break
+	// GET command shouldnt increase size, but modify 'avl.last' index
+	if l != ct.Len() {
+		t.Log(l, "commands, expected", ct.Len())
+		t.FailNow()
+	}
 
-		case *ArrayHT:
-			// cant assign multiple types on the same case statement, since Structure
-			// types are inconvertible between them.
-			if tp.first != first {
-				t.Log("first cmd index is", tp.first, ", expected", first)
-				t.FailNow()
-			}
-			if tp.last != n {
-				t.Log("last cmd index is", tp.last, ", expected", n)
-				t.FailNow()
-			}
-			break
-
-		case *AVLTreeHT:
-			if tp.first != first {
-				t.Log("first cmd index is", tp.first, ", expected", first)
-				t.FailNow()
-			}
-			if tp.last != n {
-				t.Log("last cmd index is", tp.last, ", expected", n)
-				t.FailNow()
-			}
-			break
-
-		case *CircBuffHT:
-			if tp.first != first {
-				t.Log("first cmd index is", tp.first, ", expected", first)
-				t.FailNow()
-			}
-			if tp.last != n {
-				t.Log("last cmd index is", tp.last, ", expected", n)
-				t.FailNow()
-			}
-			break
-
-		case *ConcTable:
-			if tp.logs[tp.current].first != first {
-				t.Log("first cmd index is", tp.logs[tp.current].first, ", expected", first)
-				t.FailNow()
-			}
-			if tp.logs[tp.current].last != n {
-				t.Log("last cmd index is", tp.logs[tp.current].last, ", expected", n)
-				t.FailNow()
-			}
-			break
-
-		default:
-			t.Logf("unknown structure type '%T' informed", tp)
-			t.FailNow()
-		}
+	if ct.logs[ct.current].first != first {
+		t.Log("first cmd index is", ct.logs[ct.current].first, ", expected", first)
+		t.FailNow()
+	}
+	if ct.logs[ct.current].last != n {
+		t.Log("last cmd index is", ct.logs[ct.current].last, ", expected", n)
+		t.FailNow()
 	}
 }
 
@@ -167,103 +105,59 @@ func TestStructuresDifferentRecoveries(t *testing.T) {
 		},
 	}
 
-	testCases := []struct {
-		structID uint8
-		Alg      Reducer
-		configs  []LogConfig
-	}{
-		{
-			0, // list
-			GreedyLt,
-			cfgs,
-		},
-		{
-			1, // array
-			GreedyArray,
-			cfgs,
-		},
-		{
-			2, // avltree
-			IterDFSAvl,
-			cfgs,
-		},
-		{
-			3, // circbuff
-			IterCircBuff,
-			cfgs,
-		},
-		{
-			4, // conctable
-			IterConcTable,
-			cfgs,
-		},
-	}
-	structNames := []string{"List", "Array", "AVLTree", "CircBuff", "ConcTable"}
-
-	for _, tc := range testCases {
-		for j, cf := range tc.configs {
-
-			// delete current logstate, if any, in order to avoid conflict on
-			// persistent interval scenarios
-			if cf.Tick == Interval && !cf.Inmem {
-				if err := cleanAllLogStates(); err != nil {
-					t.Log(err.Error())
-					t.FailNow()
-				}
-			}
-
-			var st Structure
-			var err error
-
-			// set the current test case algorithm
-			cf.Alg = tc.Alg
-
-			// Currently logs must be re-generated for each different config, which
-			// prohibits the generation of an unique log file for all configs. An
-			// unique log is not needed on a unit test scenario, since the idea is
-			// not to compare these strategies, only tests its correctness.
-			st, err = generateRandStructure(tc.structID, nCmds, wrt, dif, &cf)
-			if err != nil {
+	for i, cf := range cfgs {
+		// delete current logstate, if any, in order to avoid conflict on
+		// persistent interval scenarios
+		if cf.Tick == Interval && !cf.Inmem {
+			if err := cleanAllLogStates(); err != nil {
 				t.Log(err.Error())
 				t.FailNow()
 			}
-			t.Log("===Executing", structNames[tc.structID], "Test Case #", j)
+		}
 
-			// the compacted log used for later comparison
-			redLog, err := ApplyReduceAlgo(st, cf.Alg, p, n)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
+		var ct *ConcTable
+		var err error
 
-			// wait for new state attribution on concurrent structures.
-			if tc.structID == 4 {
-				time.Sleep(time.Second)
-			}
+		// Currently logs must be re-generated for each different config, which
+		// prohibits the generation of an unique log file for all configs. An
+		// unique log is not needed on a unit test scenario, since the idea is
+		// not to compare these strategies, only tests its correctness.
+		ct, err = generateRandConcTable(nCmds, wrt, dif, &cf)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
+		t.Log("===Executing ConcTable Test Case #", i)
 
-			log, err := st.Recov(p, n)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
+		// the compacted log used for later comparison
+		view := ct.retrieveCurrentViewCopy()
+		redLog := iterReduceAlg(&view)
 
-			if !logsAreEquivalent(redLog, log) {
-				if logsAreOnlyDelayed(redLog, log) {
-					t.Log("Logs are not equivalent, but only delayed")
-				} else {
-					t.Log("Logs are completely incoherent")
-					t.Log("REDC:", redLog)
-					t.Log("RECV:", log)
-					t.FailNow()
-				}
-			}
+		// wait for new state attribution on concurrent structures.
+		time.Sleep(time.Second)
 
-			if len(redLog) == 0 {
-				t.Log("Both logs are empty")
+		log, err := ct.Recov(p, n)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
+
+		if !logsAreEquivalent(redLog, log) {
+			if logsAreOnlyDelayed(redLog, log) {
+				t.Log("Logs are not equivalent, but only delayed")
+			} else {
+				t.Log("Logs are completely incoherent")
 				t.Log("REDC:", redLog)
 				t.Log("RECV:", log)
 				t.FailNow()
 			}
+		}
+
+		if len(redLog) == 0 {
+			t.Log("Both logs are empty")
+			t.Log("REDC:", redLog)
+			t.Log("RECV:", log)
+			t.FailNow()
 		}
 	}
 
@@ -289,95 +183,52 @@ func TestStructuresRecovBytesInterpretation(t *testing.T) {
 		},
 	}
 
-	testCases := []struct {
-		structID uint8
-		Alg      Reducer
-		configs  []LogConfig
-	}{
-		{
-			0, // list
-			GreedyLt,
-			cfgs,
-		},
-		{
-			1, // array
-			GreedyArray,
-			cfgs,
-		},
-		{
-			2, // avltree
-			IterDFSAvl,
-			cfgs,
-		},
-		{
-			3, // circbuff
-			IterCircBuff,
-			cfgs,
-		},
-		{
-			4, // conctable
-			IterConcTable,
-			cfgs,
-		},
-	}
-	structNames := []string{"List", "Array", "AVLTree", "CircBuff", "ConcTable"}
+	for i, cf := range cfgs {
+		var ct *ConcTable
+		var err error
 
-	for _, tc := range testCases {
-		for j, cf := range tc.configs {
-			var st Structure
-			var err error
+		ct, err = generateRandConcTable(nCmds, wrt, dif, &cf)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
+		t.Log("===Executing ConcTable Test Case #", i)
 
-			// set the current test case algorithm
-			cf.Alg = tc.Alg
+		// the compacted log used for later comparison
+		view := ct.retrieveCurrentViewCopy()
+		redLog := iterReduceAlg(&view)
 
-			st, err = generateRandStructure(tc.structID, nCmds, wrt, dif, &cf)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-			t.Log("===Executing", structNames[tc.structID], "Test Case #", j)
+		// wait for new state attribution on concurrent structures...
+		time.Sleep(time.Second)
 
-			// the compacted log used for later comparison
-			redLog, err := ApplyReduceAlgo(st, cf.Alg, p, n)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
+		raw, err := ct.RecovBytes(p, n)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
 
-			// wait for new state attribution on concurrent structures...
-			if tc.structID == 4 {
-				time.Sleep(time.Second)
-			}
+		log, err := deserializeRawLog(raw)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
 
-			raw, err := st.RecovBytes(p, n)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-
-			log, err := deserializeRawLog(raw)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-
-			if !logsAreEquivalent(redLog, log) {
-				if logsAreOnlyDelayed(redLog, log) {
-					t.Log("Logs are not equivalent, but only delayed")
-				} else {
-					t.Log("Logs are completely incoherent")
-					t.Log("REDC:", redLog)
-					t.Log("RECV:", log)
-					t.FailNow()
-				}
-			}
-
-			if len(redLog) == 0 {
-				t.Log("Both logs are empty")
+		if !logsAreEquivalent(redLog, log) {
+			if logsAreOnlyDelayed(redLog, log) {
+				t.Log("Logs are not equivalent, but only delayed")
+			} else {
+				t.Log("Logs are completely incoherent")
 				t.Log("REDC:", redLog)
 				t.Log("RECV:", log)
 				t.FailNow()
 			}
+		}
+
+		if len(redLog) == 0 {
+			t.Log("Both logs are empty")
+			t.Log("REDC:", redLog)
+			t.Log("RECV:", log)
+			t.FailNow()
 		}
 	}
 
@@ -387,70 +238,19 @@ func TestStructuresRecovBytesInterpretation(t *testing.T) {
 	}
 }
 
-func generateRandStructure(id uint8, n uint64, wrt, dif int, cfg *LogConfig) (Structure, error) {
+func generateRandConcTable(n uint64, wrt, dif int, cfg *LogConfig) (*ConcTable, error) {
 	srand := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(srand)
-	var st Structure
+	var ct *ConcTable
 	var err error
 
-	switch id {
-	case 0: // list
-		if cfg == nil {
-			st = NewListHT() // uses DefaultLogConfig underneath
-		} else {
-			st, err = NewListHTWithConfig(cfg)
-			if err != nil {
-				return nil, err
-			}
+	if cfg == nil {
+		ct = NewConcTable(context.TODO())
+	} else {
+		ct, err = NewConcTableWithConfig(context.TODO(), defaultConcLvl, cfg)
+		if err != nil {
+			return nil, err
 		}
-		break
-
-	case 1: // array
-		if cfg == nil {
-			st = NewArrayHT()
-		} else {
-			st, err = NewArrayHTWithConfig(cfg)
-			if err != nil {
-				return nil, err
-			}
-		}
-		break
-
-	case 2: // avl
-		if cfg == nil {
-			st = NewAVLTreeHT()
-		} else {
-			st, err = NewAVLTreeHTWithConfig(cfg)
-			if err != nil {
-				return nil, err
-			}
-		}
-		break
-
-	case 3: // circbuff
-		if cfg == nil {
-			st = NewCircBuffHT(context.TODO())
-		} else {
-			st, err = NewCircBuffHTWithConfig(context.TODO(), cfg, int(n))
-			if err != nil {
-				return nil, err
-			}
-		}
-		break
-
-	case 4: // conctable
-		if cfg == nil {
-			st = NewConcTable(context.TODO())
-		} else {
-			st, err = NewConcTableWithConfig(context.TODO(), defaultConcLvl, cfg)
-			if err != nil {
-				return nil, err
-			}
-		}
-		break
-
-	default:
-		return nil, fmt.Errorf("unknow structure '%d' requested", id)
 	}
 
 	for i := uint64(0); i < n; i++ {
@@ -470,12 +270,12 @@ func generateRandStructure(id uint8, n uint64, wrt, dif int, cfg *LogConfig) (St
 				Op: pb.Command_GET,
 			}
 		}
-		err = st.Log(cmd)
+		err = ct.Log(cmd)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return st, nil
+	return ct, nil
 }
 
 // deserializeRawLog emulates the same procedure implemented by a recoverying

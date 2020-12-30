@@ -28,6 +28,8 @@ const (
 	// number of commands to wait until a complete state reset for Immediately
 	// reduce period.
 	resetOnImmediately int = 4000
+
+	chanBuffSize = 128
 )
 
 // logEvent represents a event metadata passed to logger routines signalling a persistence
@@ -35,6 +37,10 @@ const (
 type logEvent struct {
 	table, measure int
 }
+
+// minStateTable is a minimal format of the ordinary stateTable, storing only
+// the lates state for each key.
+type minStateTable map[string]State
 
 // ConcTable ...
 type ConcTable struct {
@@ -68,7 +74,6 @@ func NewConcTable(ctx context.Context) *ConcTable {
 	}
 
 	def := *DefaultLogConfig()
-	def.Alg = IterConcTable
 	for i := 0; i < defaultConcLvl; i++ {
 		ct.logs[i] = logData{config: &def}
 		ct.views[i] = make(minStateTable, 0)
@@ -409,10 +414,7 @@ func (ct *ConcTable) RecovEntireLogConc() (<-chan []byte, int, error) {
 // persistTable applies the configured algorithm on a specific view and updates
 // the latest log state into a new file.
 func (ct *ConcTable) persistTable(id int, secDisk bool) error {
-	cmds, err := ct.executeReduceAlgOnView(id)
-	if err != nil {
-		return err
-	}
+	cmds := ct.executeReduceAlgOnView(id)
 	return ct.logs[id].updateLogState(cmds, ct.logs[id].first, ct.logs[id].last, secDisk)
 }
 
@@ -564,14 +566,19 @@ func (ct *ConcTable) resetViewState(id int) {
 	ct.logs[id].logged = false
 }
 
-// executeReduceAlgOnView applies the configured reduce algorithm on a conflict-free view,
+// executeReduceAlgOnView applies the iterative compaction algorithm on a conflict-free view,
 // mutual exclusion is done by outer scope.
-func (ct *ConcTable) executeReduceAlgOnView(id int) ([]pb.Command, error) {
-	switch ct.logs[id].config.Alg {
-	case IterConcTable:
-		return IterConcTableOnView(&ct.views[id]), nil
+func (ct *ConcTable) executeReduceAlgOnView(id int) []pb.Command {
+	return iterReduceAlg(&ct.views[id])
+}
+
+// iterReduceAlg execute iterative compaction algorithm over a minTable structure.
+func iterReduceAlg(tbl *minStateTable) []pb.Command {
+	log := []pb.Command{}
+	for _, st := range *tbl {
+		log = append(log, st.cmd)
 	}
-	return nil, errors.New("unsupported reduce algorithm for a ConcTable structure")
+	return log
 }
 
 // Shutdown ...

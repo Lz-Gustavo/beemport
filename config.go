@@ -31,7 +31,6 @@ type LogConfig struct {
 	KeepAll bool
 	Sync    bool
 	Measure bool
-	Alg     Reducer
 	Tick    ReduceInterval
 	Period  uint32
 	Fname   string
