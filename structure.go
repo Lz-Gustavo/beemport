@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/Lz-Gustavo/beemport/pb"
-
 	"github.com/golang/protobuf/proto"
 )
 
@@ -117,9 +116,7 @@ func (ld *logData) updateLogState(lg []pb.Command, p, n uint64, secDisk bool) er
 
 func (ld *logData) appendToLogState(lg []pb.Command, p, n uint64) error {
 	if ld.config.Inmem {
-		for _, c := range lg {
-			*ld.recentLog = append(*ld.recentLog, c)
-		}
+		*ld.recentLog = append(*ld.recentLog, lg...)
 		return nil
 	}
 

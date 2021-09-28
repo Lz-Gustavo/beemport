@@ -50,12 +50,12 @@ func TestConcTableLog(t *testing.T) {
 		t.FailNow()
 	}
 
-	if ct.logs[ct.current].first != first {
-		t.Log("first cmd index is", ct.logs[ct.current].first, ", expected", first)
+	if ct.logs[ct.cursor].first != first {
+		t.Log("first cmd index is", ct.logs[ct.cursor].first, ", expected", first)
 		t.FailNow()
 	}
-	if ct.logs[ct.current].last != n {
-		t.Log("last cmd index is", ct.logs[ct.current].last, ", expected", n)
+	if ct.logs[ct.cursor].last != n {
+		t.Log("last cmd index is", ct.logs[ct.cursor].last, ", expected", n)
 		t.FailNow()
 	}
 }

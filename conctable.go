@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Lz-Gustavo/beemport/pb"
 )
@@ -29,7 +27,7 @@ const (
 	// reduce period.
 	resetOnImmediately int = 4000
 
-	chanBuffSize = 128
+	loggerChanBuffSize int = 128
 )
 
 // logEvent represents a event metadata passed to logger routines signalling a persistence
@@ -45,26 +43,26 @@ type State struct {
 	cmd pb.Command
 }
 
-// minStateTable is a minimal format of an ordinary stateTable, storing only
+// stateTable is a minimal format of an ordinary stateTable, storing only
 // the lates state for each key.
-type minStateTable map[string]State
+type stateTable map[string]State
 
 // ConcTable ...
 type ConcTable struct {
-	views []minStateTable
+	views []stateTable
 	mu    []sync.Mutex
 	logs  []logData
 	canc  context.CancelFunc
 
 	concLevel int
 	loggerReq chan logEvent
-	curMu     sync.Mutex
-	current   int
+	cursorMu  sync.Mutex
+	cursor    int
 	prevLog   int32 // atomic
 	logFolder string
 
-	msr bool
-	lm  *latencyMeasure
+	isMeasuringLat bool
+	latMeasure     *latencyMeasure
 }
 
 // NewConcTable ...
@@ -72,18 +70,18 @@ func NewConcTable(ctx context.Context) *ConcTable {
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
 		canc:      cancel,
-		loggerReq: make(chan logEvent, chanBuffSize),
+		loggerReq: make(chan logEvent, loggerChanBuffSize),
 		concLevel: defaultConcLvl,
 
-		views: make([]minStateTable, defaultConcLvl, defaultConcLvl),
-		mu:    make([]sync.Mutex, defaultConcLvl, defaultConcLvl),
-		logs:  make([]logData, defaultConcLvl, defaultConcLvl),
+		views: make([]stateTable, defaultConcLvl),
+		mu:    make([]sync.Mutex, defaultConcLvl),
+		logs:  make([]logData, defaultConcLvl),
 	}
 
 	def := *DefaultLogConfig()
 	for i := 0; i < defaultConcLvl; i++ {
 		ct.logs[i] = logData{config: &def}
-		ct.views[i] = make(minStateTable, 0)
+		ct.views[i] = make(stateTable)
 	}
 	ct.logFolder = extractLocation(def.Fname)
 
@@ -105,24 +103,24 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
 		canc:      cancel,
-		loggerReq: make(chan logEvent, chanBuffSize),
+		loggerReq: make(chan logEvent, loggerChanBuffSize),
 		concLevel: concLvl,
 
-		views: make([]minStateTable, concLvl, concLvl),
-		mu:    make([]sync.Mutex, concLvl, concLvl),
-		logs:  make([]logData, concLvl, concLvl),
+		views: make([]stateTable, concLvl),
+		mu:    make([]sync.Mutex, concLvl),
+		logs:  make([]logData, concLvl),
 	}
 
 	for i := 0; i < concLvl; i++ {
 		ct.logs[i] = logData{config: cfg}
-		ct.views[i] = make(minStateTable, 0)
+		ct.views[i] = make(stateTable)
 	}
 	ct.logFolder = extractLocation(cfg.Fname)
 
 	if cfg.Measure {
-		ct.msr = true
+		ct.isMeasuringLat = true
 		fn := ct.logFolder + "bl-" + strconv.Itoa(int(cfg.Period)) + "-latency.out"
-		ct.lm, err = newLatencyMeasure(concLvl, int(cfg.Period), fn)
+		ct.latMeasure, err = newLatencyMeasure(concLvl, int(cfg.Period), fn)
 		if err != nil {
 			return nil, err
 		}
@@ -148,22 +146,18 @@ func (ct *ConcTable) Str() string {
 // safely discarded on ConcTable structures, just compute:
 //   ct.logs[ct.current].last - ct.logs[ct.current].first + 1
 func (ct *ConcTable) Len() uint64 {
-	return uint64(len(ct.views[ct.current]))
+	return uint64(len(ct.views[ct.cursor]))
 }
 
 // Log records the occurence of command 'cmd' on the provided index.
 func (ct *ConcTable) Log(cmd pb.Command) error {
 	wrt := cmd.Op == pb.Command_SET
-	ct.curMu.Lock()
-	cur := ct.current
+	ct.cursorMu.Lock()
+	cur := ct.cursor
 
 	// first command
-	if ct.msr {
-		ct.lm.absIndex++
-		if (ct.lm.absIndex%ct.lm.interval == 1 || ct.lm.interval == 1) && rand.Intn(measureChance) == 0 {
-			ct.lm.initLat[ct.lm.msrIndex] = time.Now().UnixNano()
-			ct.lm.drawn = true
-		}
+	if ct.isMeasuringLat {
+		ct.latMeasure.notifyReceivedCommand()
 	}
 
 	willReduce, advance := ct.willRequireReduceOnView(wrt, cur)
@@ -173,23 +167,10 @@ func (ct *ConcTable) Log(cmd pb.Command) error {
 
 	// must acquire view mutex before releasing cursor to ensure safety
 	ct.mu[cur].Lock()
-	ct.curMu.Unlock()
+	ct.cursorMu.Unlock()
 
-	if ct.msr && ct.lm.drawn {
-		if ct.lm.absIndex%ct.lm.interval == 1 {
-			// first command was written into table
-			ct.lm.writeLat[ct.lm.msrIndex] = time.Now().UnixNano()
-
-		} else if ct.lm.interval == 1 {
-			// special case of first and last command, which does not fall
-			// on first condition
-			ct.lm.writeLat[ct.lm.msrIndex] = time.Now().UnixNano()
-			ct.lm.fillLat[ct.lm.msrIndex] = time.Now().UnixNano()
-
-		} else if ct.lm.absIndex%ct.lm.interval == 0 {
-			// last command, table filled
-			ct.lm.fillLat[ct.lm.msrIndex] = time.Now().UnixNano()
-		}
+	if ct.isMeasuringLat {
+		ct.latMeasure.notifyCommandWrite()
 	}
 
 	// adjust first structure index
@@ -211,18 +192,17 @@ func (ct *ConcTable) Log(cmd pb.Command) error {
 
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
-		if ct.msr && ct.lm.drawn {
-			ct.loggerReq <- logEvent{cur, ct.lm.msrIndex}
-			ct.lm.msrIndex++
-			ct.lm.drawn = false
+		if ct.isMeasuringLat {
+			ct.latMeasure.notifyTableFill()
+			ct.loggerReq <- logEvent{cur, ct.latMeasure.msrIndex}
 
 		} else {
 			ct.loggerReq <- logEvent{cur, -1}
 		}
-
-	} else {
-		ct.mu[cur].Unlock()
+		return nil
 	}
+
+	ct.mu[cur].Unlock()
 	return nil
 }
 
@@ -399,21 +379,19 @@ func (ct *ConcTable) RecovEntireLogConc() (<-chan []byte, int, error) {
 
 			wg.Done()
 			fmt.Println("finished one...")
-			return
 		}(f)
 	}
 
 	wg.Wait()
 	fmt.Println("finished reading logs!")
 
-	out := make(chan []byte, 0)
+	out := make(chan []byte)
 	sc := bufio.NewScanner(buf)
 	go func() {
 		for sc.Scan() {
 			out <- sc.Bytes()
 		}
 		close(out)
-		return
 	}()
 	return out, len(fs), nil
 }
@@ -466,7 +444,7 @@ func (ct *ConcTable) handleReduce(ctx context.Context, secDisk bool) {
 
 			// requested latency measurement for persist
 			if event.measure != -1 {
-				ct.lm.perstLat[event.measure] = time.Now().UnixNano()
+				ct.latMeasure.notifyTablePersistence(event.measure)
 			}
 		}
 	}
@@ -475,17 +453,17 @@ func (ct *ConcTable) handleReduce(ctx context.Context, secDisk bool) {
 // readAndAdvanceCurrentView reads the current view id then advances it to the next
 // available identifier, returning the old observed value.
 func (ct *ConcTable) readAndAdvanceCurrentView() int {
-	ct.curMu.Lock()
-	cur := ct.current
+	ct.cursorMu.Lock()
+	cur := ct.cursor
 	ct.advanceCurrentView()
-	ct.curMu.Unlock()
+	ct.cursorMu.Unlock()
 	return cur
 }
 
 // advanceCurrentView advances the current view to its next id.
 func (ct *ConcTable) advanceCurrentView() {
-	d := (ct.current - ct.concLevel + 1)
-	ct.current = modInt(d, ct.concLevel)
+	d := (ct.cursor - ct.concLevel + 1)
+	ct.cursor = modInt(d, ct.concLevel)
 }
 
 // mayTriggerReduceOnView possibly triggers the reduce algorithm over the informed view
@@ -557,16 +535,16 @@ func (ct *ConcTable) mayExecuteLazyReduce(id int) (bool, error) {
 
 // retrieveCurrentViewCopy returns a copy of the current view, without advancing it.
 // Used only for test purposes.
-func (ct *ConcTable) retrieveCurrentViewCopy() minStateTable {
-	ct.curMu.Lock()
-	defer ct.curMu.Unlock()
-	return ct.views[ct.current]
+func (ct *ConcTable) retrieveCurrentViewCopy() stateTable {
+	ct.cursorMu.Lock()
+	defer ct.cursorMu.Unlock()
+	return ct.views[ct.cursor]
 }
 
 // resetViewState cleans the current state of the informed view. Must be called from mutual
 // exclusion scope.
 func (ct *ConcTable) resetViewState(id int) {
-	ct.views[id] = make(minStateTable, 0)
+	ct.views[id] = make(stateTable)
 
 	// reset log data
 	ct.logs[id].first, ct.logs[id].last = 0, 0
@@ -580,7 +558,7 @@ func (ct *ConcTable) executeReduceAlgOnView(id int) []pb.Command {
 }
 
 // iterReduceAlg execute iterative compaction algorithm over a minTable structure.
-func iterReduceAlg(tbl *minStateTable) []pb.Command {
+func iterReduceAlg(tbl *stateTable) []pb.Command {
 	log := []pb.Command{}
 	for _, st := range *tbl {
 		log = append(log, st.cmd)
@@ -591,9 +569,9 @@ func iterReduceAlg(tbl *minStateTable) []pb.Command {
 // Shutdown ...
 func (ct *ConcTable) Shutdown() {
 	ct.canc()
-	if ct.msr {
-		ct.lm.flush()
-		ct.lm.close()
+	if ct.isMeasuringLat {
+		ct.latMeasure.flush()
+		ct.latMeasure.close()
 	}
 }
 

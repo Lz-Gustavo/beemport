@@ -24,8 +24,8 @@ func BenchmarkConcTableThroughput(b *testing.B) {
 	// dummy goroutine that creates a random log of commands
 	go createRandomLog(numCommands, diffKeys, writePercent, log)
 
-	chA := make(chan pb.Command, 0)
-	chB := make(chan pb.Command, 0)
+	chA := make(chan pb.Command)
+	chB := make(chan pb.Command)
 
 	wg := &sync.WaitGroup{}
 	mu := &sync.Mutex{}
