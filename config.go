@@ -25,6 +25,12 @@ const (
 	Interval
 )
 
+var (
+	ErrNoFilename       = errors.New("invalid config: if persistent storage (i.e. Inmem == false), config.Fname must be provided")
+	ErrNoLogPeriod      = errors.New("invalid config: if periodic reduce is set (i.e. Tick == Interval), a config.Period must be provided")
+	ErrNoSecondFilename = errors.New("invalid config: if parallel io is set (i.e. ParallelIO == true), config.secondFname must be provided")
+)
+
 // LogConfig ...
 type LogConfig struct {
 	Inmem   bool
@@ -50,13 +56,13 @@ func DefaultLogConfig() *LogConfig {
 // ValidateConfig ...
 func (lc *LogConfig) ValidateConfig() error {
 	if !lc.Inmem && lc.Fname == "" {
-		return errors.New("invalid config: if persistent storage (i.e. Inmem == false), config.Fname must be provided")
+		return ErrNoFilename
 	}
 	if lc.Tick == Interval && lc.Period == 0 {
-		return errors.New("invalid config: if periodic reduce is set (i.e. Tick == Interval), a config.Period must be provided")
+		return ErrNoLogPeriod
 	}
 	if lc.ParallelIO && lc.SecondFname == "" {
-		return errors.New("invalid config: if parallel io is set (i.e. ParallelIO == true), config.secondFname must be provided")
+		return ErrNoSecondFilename
 	}
 	return nil
 }

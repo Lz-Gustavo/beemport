@@ -19,11 +19,11 @@ type logData struct {
 	config      *LogConfig
 	logged      bool
 	first, last uint64
-	recentLog   *[]pb.Command // used only on Immediately inmem config
-	count       uint32        // used on Interval config
+	recentLog   *[]*pb.Entry // used only on Immediately inmem config
+	count       uint32       // used on Interval config
 }
 
-func (ld *logData) retrieveLog() ([]pb.Command, error) {
+func (ld *logData) retrieveLog() ([]*pb.Entry, error) {
 	if ld.config.Inmem {
 		return *ld.recentLog, nil
 	}
@@ -63,7 +63,7 @@ func (ld *logData) retrieveRawLog(p, n uint64) ([]byte, error) {
 	return logs, nil
 }
 
-func (ld *logData) updateLogState(lg []pb.Command, p, n uint64, secDisk bool) error {
+func (ld *logData) updateLogState(lg []*pb.Entry, p, n uint64, secDisk bool) error {
 	if ld.config.Inmem {
 		// update the most recent inmem log state
 		ld.recentLog = &lg
@@ -114,7 +114,7 @@ func (ld *logData) updateLogState(lg []pb.Command, p, n uint64, secDisk bool) er
 	return nil
 }
 
-func (ld *logData) appendToLogState(lg []pb.Command, p, n uint64) error {
+func (ld *logData) appendToLogState(lg []*pb.Entry, p, n uint64) error {
 	if ld.config.Inmem {
 		*ld.recentLog = append(*ld.recentLog, lg...)
 		return nil
@@ -155,8 +155,8 @@ func (ld *logData) firstReduceExists() bool {
 
 // RetainLogInterval receives an entire log and returns the corresponding log
 // matching [p, n] indexes.
-func RetainLogInterval(log *[]pb.Command, p, n uint64) []pb.Command {
-	cmds := make([]pb.Command, 0, n-p)
+func RetainLogInterval(log *[]*pb.Entry, p, n uint64) []*pb.Entry {
+	cmds := make([]*pb.Entry, 0, n-p)
 
 	// TODO: Later improve retrieve algorithm, exploiting the pre-ordering of
 	// commands based on c.Id. The idea is to simply identify the first and last
@@ -172,7 +172,7 @@ func RetainLogInterval(log *[]pb.Command, p, n uint64) []pb.Command {
 // UnmarshalLogFromReader returns the entire log contained at 'logRd', interpreting commands
 // from the byte stream following a simple slicing protocol, where the size of each command
 // is binary encoded before each raw pbuff.
-func UnmarshalLogFromReader(logRd io.Reader) ([]pb.Command, error) {
+func UnmarshalLogFromReader(logRd io.Reader) ([]*pb.Entry, error) {
 	var f, l uint64
 	var ln int
 
@@ -194,8 +194,8 @@ func UnmarshalLogFromReader(logRd io.Reader) ([]pb.Command, error) {
 // difference. The numbers are followed by a sequence of 'n' serialized pbuff commands, each
 // prefixed by its binary encoded size, 32b, BigEndian format. An 'EOL' flag at tail is mandatory,
 // signaling a safe log creation.
-func unmarshalBeelog(rd io.Reader, ln int) ([]pb.Command, error) {
-	cmds := make([]pb.Command, 0, ln)
+func unmarshalBeelog(rd io.Reader, ln int) ([]*pb.Entry, error) {
+	cmds := make([]*pb.Entry, 0, ln)
 	for j := 0; j < ln; j++ {
 		var cmdLen int32
 		err := binary.Read(rd, binary.BigEndian, &cmdLen)
@@ -213,12 +213,11 @@ func unmarshalBeelog(rd io.Reader, ln int) ([]pb.Command, error) {
 			return nil, err
 		}
 
-		c := &pb.Command{}
-		err = proto.Unmarshal(raw, c)
-		if err != nil {
+		c := pb.Entry{}
+		if err = proto.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		cmds = append(cmds, *c)
+		cmds = append(cmds, &c)
 	}
 
 	var eol string
@@ -238,8 +237,8 @@ func unmarshalBeelog(rd io.Reader, ln int) ([]pb.Command, error) {
 // The numbers are followed by a sequence of serialized pbuff commands, each prefixed by
 // its binary encoded size, 32b, BigEndian format. Commands are parsed until EOF or
 // ErrUnexpectedEOF during file read.
-func unmarshalTradLog(rd io.Reader) ([]pb.Command, error) {
-	cmds := make([]pb.Command, 0)
+func unmarshalTradLog(rd io.Reader) ([]*pb.Entry, error) {
+	cmds := make([]*pb.Entry, 0)
 	for j := 0; ; j++ {
 		var cmdLen int32
 		err := binary.Read(rd, binary.BigEndian, &cmdLen)
@@ -257,12 +256,11 @@ func unmarshalTradLog(rd io.Reader) ([]pb.Command, error) {
 			return nil, err
 		}
 
-		c := &pb.Command{}
-		err = proto.Unmarshal(raw, c)
-		if err != nil {
+		c := pb.Entry{}
+		if err = proto.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		cmds = append(cmds, *c)
+		cmds = append(cmds, &c)
 	}
 	return cmds, nil
 }
@@ -273,7 +271,7 @@ func unmarshalTradLog(rd io.Reader) ([]pb.Command, error) {
 //
 // Important: 'EOL' flag is not mandatory when limiting the number of commands. That allows a
 // concurrent interpretation of the log content while being written by an APPEND file descriptor.
-func UnmarshalLogWithLenFromReader(logRd io.Reader, n int) ([]pb.Command, error) {
+func UnmarshalLogWithLenFromReader(logRd io.Reader, n int) ([]*pb.Entry, error) {
 	// read the retrieved log interval ln parsed, matching log format, but ignored
 	var f, l uint64
 	var ln int
@@ -282,7 +280,7 @@ func UnmarshalLogWithLenFromReader(logRd io.Reader, n int) ([]pb.Command, error)
 		return nil, err
 	}
 
-	cmds := make([]pb.Command, 0, n)
+	cmds := make([]*pb.Entry, 0, n)
 	for j := 0; j < n; j++ {
 		var commandLength int32
 		err := binary.Read(logRd, binary.BigEndian, &commandLength)
@@ -300,12 +298,11 @@ func UnmarshalLogWithLenFromReader(logRd io.Reader, n int) ([]pb.Command, error)
 			return nil, err
 		}
 
-		c := &pb.Command{}
-		err = proto.Unmarshal(raw, c)
-		if err != nil {
+		c := pb.Entry{}
+		if err = proto.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		cmds = append(cmds, *c)
+		cmds = append(cmds, &c)
 	}
 	return cmds, nil
 }
@@ -314,7 +311,7 @@ func UnmarshalLogWithLenFromReader(logRd io.Reader, n int) ([]pb.Command, error)
 // the entire command log following a simple serialization procedure where the size of
 // each command is binary encoded before the raw pbuff. Commands are marshaled and written to
 // 'logWr' one by one.
-func MarshalLogIntoWriter(logWr io.Writer, log *[]pb.Command, p, n uint64) error {
+func MarshalLogIntoWriter(logWr io.Writer, log *[]*pb.Entry, p, n uint64) error {
 	// write requested delimiters for the current state and num
 	_, err := fmt.Fprintf(logWr, "%d\n%d\n%d\n", p, n, len(*log))
 	if err != nil {
@@ -322,7 +319,7 @@ func MarshalLogIntoWriter(logWr io.Writer, log *[]pb.Command, p, n uint64) error
 	}
 
 	for _, c := range *log {
-		raw, err := proto.Marshal(&c)
+		raw, err := proto.Marshal(c)
 		if err != nil {
 			return err
 		}
@@ -348,7 +345,7 @@ func MarshalLogIntoWriter(logWr io.Writer, log *[]pb.Command, p, n uint64) error
 }
 
 // MarshalBufferedLogIntoWriter ...
-func MarshalBufferedLogIntoWriter(logWr io.Writer, log *[]pb.Command, p, n uint64) error {
+func MarshalBufferedLogIntoWriter(logWr io.Writer, log *[]*pb.Entry, p, n uint64) error {
 	buff := bytes.NewBuffer(nil)
 	buff.Grow(len(*log))
 
@@ -367,10 +364,10 @@ func MarshalBufferedLogIntoWriter(logWr io.Writer, log *[]pb.Command, p, n uint6
 // MarshalAndAppendIntoWriter marshals the entire command log following a simple serialization
 // procedure where the size of each command is binary encoded before the raw pbuff. After
 // serialization the entire byte sequence is appended to 'logWr' on a single call.
-func MarshalAndAppendIntoWriter(logWr io.WriteSeeker, log *[]pb.Command) error {
+func MarshalAndAppendIntoWriter(logWr io.WriteSeeker, log *[]*pb.Entry) error {
 	buff := bytes.NewBuffer(nil)
 	for _, c := range *log {
-		raw, err := proto.Marshal(&c)
+		raw, err := proto.Marshal(c)
 		if err != nil {
 			return err
 		}

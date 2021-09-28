@@ -25,7 +25,7 @@ func TestConcTableLog(t *testing.T) {
 
 	// populate some SET commands
 	for i := first; i < n; i++ {
-		err := ct.Log(pb.Command{Id: i, Op: pb.Command_SET, Key: strconv.Itoa(int(i))})
+		err := ct.Log(&pb.Entry{Id: i, WriteOp: true, Key: strconv.Itoa(int(i))})
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -38,8 +38,7 @@ func TestConcTableLog(t *testing.T) {
 	}
 
 	// log another GET
-	err := ct.Log(pb.Command{Id: n, Op: pb.Command_GET})
-	if err != nil {
+	if err := ct.Log(&pb.Entry{Id: n}); err != nil {
 		t.Log(err.Error())
 		t.FailNow()
 	}
@@ -424,23 +423,18 @@ func generateRandConcTable(n uint64, wrt, dif int, cfg *LogConfig) (*ConcTable, 
 	}
 
 	for i := uint64(0); i < n; i++ {
-		var cmd pb.Command
+		var cmd pb.Entry
 		if cn := r.Intn(100); cn < wrt {
-			cmd = pb.Command{
-				Id:    i,
-				Key:   strconv.Itoa(r.Intn(dif)),
-				Value: strconv.Itoa(r.Int()),
-				Op:    pb.Command_SET,
+			cmd = pb.Entry{
+				Id:      i,
+				Key:     strconv.Itoa(r.Intn(dif)),
+				WriteOp: true,
 			}
 
 		} else {
-			// only SETS states are needed
-			cmd = pb.Command{
-				Id: i,
-				Op: pb.Command_GET,
-			}
+			cmd = pb.Entry{Id: i}
 		}
-		err = ct.Log(cmd)
+		err = ct.Log(&cmd)
 		if err != nil {
 			return nil, err
 		}
@@ -450,7 +444,7 @@ func generateRandConcTable(n uint64, wrt, dif int, cfg *LogConfig) (*ConcTable, 
 
 // deserializeRawLog emulates the same procedure implemented by a recoverying
 // replica, interpreting the serialized log received from any byte stream.
-func deserializeRawLog(log []byte) ([]pb.Command, error) {
+func deserializeRawLog(log []byte) ([]*pb.Entry, error) {
 	rd := bytes.NewReader(log)
 
 	// read the retrieved log interval
@@ -461,7 +455,7 @@ func deserializeRawLog(log []byte) ([]pb.Command, error) {
 		return nil, err
 	}
 
-	cmds := make([]pb.Command, 0, ln)
+	cmds := make([]*pb.Entry, 0, ln)
 	for j := 0; j < ln; j++ {
 		var commandLength int32
 		err := binary.Read(rd, binary.BigEndian, &commandLength)
@@ -479,12 +473,11 @@ func deserializeRawLog(log []byte) ([]pb.Command, error) {
 			return nil, err
 		}
 
-		c := &pb.Command{}
-		err = proto.Unmarshal(serializedCmd, c)
-		if err != nil {
+		c := pb.Entry{}
+		if err = proto.Unmarshal(serializedCmd, &c); err != nil {
 			return nil, err
 		}
-		cmds = append(cmds, *c)
+		cmds = append(cmds, &c)
 	}
 
 	var eol string
@@ -502,9 +495,9 @@ func deserializeRawLog(log []byte) ([]pb.Command, error) {
 // deserializeRawLogStream emulates the same procedure implemented by a recov
 // replica, interpreting the serialized log stream received from RecovEntireLog
 // different calls.
-func deserializeRawLogStream(stream []byte, size int) ([]pb.Command, error) {
+func deserializeRawLogStream(stream []byte, size int) ([]*pb.Entry, error) {
 	rd := bytes.NewReader(stream)
-	cmds := make([]pb.Command, 0, 256*size)
+	cmds := make([]*pb.Entry, 0, 256*size)
 
 	for i := 0; i < size; i++ {
 		// read the retrieved log interval
@@ -532,13 +525,12 @@ func deserializeRawLogStream(stream []byte, size int) ([]pb.Command, error) {
 				return nil, err
 			}
 
-			c := &pb.Command{}
-			err = proto.Unmarshal(serializedCmd, c)
-			if err != nil {
+			c := pb.Entry{}
+			if err = proto.Unmarshal(serializedCmd, &c); err != nil {
 				fmt.Println("could not parse")
 				return nil, err
 			}
-			cmds = append(cmds, *c)
+			cmds = append(cmds, &c)
 		}
 
 		var eol string
@@ -561,7 +553,7 @@ func deserializeRawLogStream(stream []byte, size int) ([]pb.Command, error) {
 // from beelog can have commands on different orders, which is safe as long as
 // if a log posses a command 'c' on index 'i', no other log records a command 'k'
 // on 'i' where 'k' != 'c'.
-func logsAreEquivalent(logA, logB []pb.Command) bool {
+func logsAreEquivalent(logA, logB []*pb.Entry) bool {
 	// not the same size, directly not equivalent
 	if len(logA) != len(logB) {
 		return false
@@ -574,12 +566,12 @@ func logsAreEquivalent(logA, logB []pb.Command) bool {
 
 	// apply each log on a hash table, checking if they have the same
 	// values for the same keys
-	htA := make(map[string]string)
-	htB := make(map[string]string)
+	htA := make(map[string][]byte)
+	htB := make(map[string][]byte)
 
 	for i := range logA {
-		htA[logA[i].Key] = logA[i].Value
-		htB[logB[i].Key] = logB[i].Value
+		htA[logA[i].Key] = logA[i].Command
+		htB[logB[i].Key] = logB[i].Command
 	}
 	return reflect.DeepEqual(htA, htB)
 }
@@ -598,7 +590,7 @@ func logsAreEquivalent(logA, logB []pb.Command) bool {
 //  Let 'x' and 'y' be log commands, 'x' is considered 'advanced' from 'y' iff:
 //   (i)  'x' and 'y' operate over the same underlying key (i.e. 'x.Key' == 'y.Key') AND
 //   (ii) 'x' has a higher index than 'y' (i.e. 'x.Ind' > 'y.Ind')
-func logsAreOnlyDelayed(logA, logB []pb.Command) bool {
+func logsAreOnlyDelayed(logA, logB []*pb.Entry) bool {
 	htA := make(map[string]uint64)
 	htB := make(map[string]uint64)
 

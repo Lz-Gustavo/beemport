@@ -19,13 +19,13 @@ import (
 func BenchmarkConcTableThroughput(b *testing.B) {
 	b.SetParallelism(runtime.NumCPU())
 	numCommands, diffKeys, writePercent := uint64(1000000), 1000, 50
-	log := make(chan pb.Command, numCommands)
+	log := make(chan *pb.Entry, numCommands)
 
 	// dummy goroutine that creates a random log of commands
 	go createRandomLog(numCommands, diffKeys, writePercent, log)
 
-	chA := make(chan pb.Command)
-	chB := make(chan pb.Command)
+	chA := make(chan *pb.Entry)
+	chB := make(chan *pb.Entry)
 
 	wg := &sync.WaitGroup{}
 	mu := &sync.Mutex{}
@@ -42,32 +42,28 @@ func BenchmarkConcTableThroughput(b *testing.B) {
 	close(log)
 }
 
-func createRandomLog(n uint64, dif, wrt int, out chan<- pb.Command) {
+func createRandomLog(n uint64, dif, wrt int, out chan<- *pb.Entry) {
 	srand := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(srand)
 
 	for i := uint64(0); i < n; i++ {
-		cmd := pb.Command{
+		cmd := pb.Entry{
 			Id:  i,
 			Key: strconv.Itoa(r.Intn(dif)),
 		}
 
 		// WRITE operation
 		if cn := r.Intn(100); cn < wrt {
-			cmd.Value = strconv.Itoa(r.Int())
-			cmd.Op = pb.Command_SET
-
-		} else {
-			cmd.Op = pb.Command_GET
+			cmd.WriteOp = true
 		}
-		out <- cmd
+		out <- &cmd
 	}
 
 	// indicates the last command in the log, forcing consumer goroutines to halt
-	out <- pb.Command{}
+	out <- &pb.Entry{}
 }
 
-func splitIntoWorkers(src <-chan pb.Command, wrks ...chan<- pb.Command) {
+func splitIntoWorkers(src <-chan *pb.Entry, wrks ...chan<- *pb.Entry) {
 	for {
 		select {
 		case cmd, ok := <-src:
@@ -76,7 +72,7 @@ func splitIntoWorkers(src <-chan pb.Command, wrks ...chan<- pb.Command) {
 			}
 			for _, ch := range wrks {
 				// avoid blocking receive on the sync ch
-				go func(dest chan<- pb.Command, c pb.Command) {
+				go func(dest chan<- *pb.Entry, c *pb.Entry) {
 					dest <- c
 				}(ch, cmd)
 			}
@@ -84,7 +80,7 @@ func splitIntoWorkers(src <-chan pb.Command, wrks ...chan<- pb.Command) {
 	}
 }
 
-func runConcTable(log <-chan pb.Command, n uint64, mu *sync.Mutex, wg *sync.WaitGroup) {
+func runConcTable(log <-chan *pb.Entry, n uint64, mu *sync.Mutex, wg *sync.WaitGroup) {
 	ct := NewConcTable(context.TODO())
 	var i uint64
 	defer wg.Done()
@@ -114,7 +110,7 @@ BREAK:
 
 	var (
 		fn, id string
-		out    []pb.Command
+		out    []*pb.Entry
 
 		// elapsed time to recovery the entire log
 		recov time.Duration
@@ -142,8 +138,8 @@ BREAK:
 	mu.Unlock()
 }
 
-func runTraditionalLog(log <-chan pb.Command, n uint64, mu *sync.Mutex, wg *sync.WaitGroup) {
-	logfile := make([]pb.Command, 0, n)
+func runTraditionalLog(log <-chan *pb.Entry, n uint64, mu *sync.Mutex, wg *sync.WaitGroup) {
+	logfile := make([]*pb.Entry, 0, n)
 	var i uint64
 	defer wg.Done()
 
@@ -190,7 +186,7 @@ BREAK:
 	mu.Unlock()
 }
 
-func dumpLogIntoFile(folder, name string, log []pb.Command) error {
+func dumpLogIntoFile(folder, name string, log []*pb.Entry) error {
 	if _, exists := os.Stat(folder); os.IsNotExist(exists) {
 		os.Mkdir(folder, 0744)
 	}
@@ -202,7 +198,7 @@ func dumpLogIntoFile(folder, name string, log []pb.Command) error {
 	defer out.Close()
 
 	for _, cmd := range log {
-		_, err = fmt.Fprintf(out, "%d %s %v\n", cmd.Op, cmd.Key, cmd.Value)
+		_, err = fmt.Fprintf(out, "%v %s %v\n", cmd.WriteOp, cmd.Key, cmd.Command)
 		if err != nil {
 			return err
 		}

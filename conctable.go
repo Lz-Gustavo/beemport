@@ -30,22 +30,20 @@ const (
 	loggerChanBuffSize int = 128
 )
 
+var (
+	ErrInvalidConcLevel     = errors.New("must inform a positive value for 'concLevel' argument")
+	ErrInvalidRecovInterval = errors.New("invalid interval request, 'n' must be >= 'p'")
+)
+
 // logEvent represents a event metadata passed to logger routines signalling a persistence
 // to a certain table, and the array position to store the measurement data.
 type logEvent struct {
 	table, measure int
 }
 
-// State represents a new state, a command execution happening on a certain
-// consensus index, analogous to a logical clock event.
-type State struct {
-	ind uint64
-	cmd pb.Command
-}
-
 // stateTable is a minimal format of an ordinary stateTable, storing only
 // the lates state for each key.
-type stateTable map[string]State
+type stateTable map[string]*pb.Entry
 
 // ConcTable ...
 type ConcTable struct {
@@ -97,7 +95,7 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 		return nil, err
 	}
 	if concLvl < 0 {
-		return nil, errors.New("must inform a positive value for 'concLevel' argument")
+		return nil, ErrInvalidConcLevel
 	}
 
 	c, cancel := context.WithCancel(ctx)
@@ -150,8 +148,7 @@ func (ct *ConcTable) Len() uint64 {
 }
 
 // Log records the occurence of command 'cmd' on the provided index.
-func (ct *ConcTable) Log(cmd pb.Command) error {
-	wrt := cmd.Op == pb.Command_SET
+func (ct *ConcTable) Log(cmd *pb.Entry) error {
 	ct.cursorMu.Lock()
 	cur := ct.cursor
 
@@ -160,7 +157,7 @@ func (ct *ConcTable) Log(cmd pb.Command) error {
 		ct.latMeasure.notifyReceivedCommand()
 	}
 
-	willReduce, advance := ct.willRequireReduceOnView(wrt, cur)
+	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
 	if advance {
 		ct.advanceCurrentView()
 	}
@@ -179,13 +176,9 @@ func (ct *ConcTable) Log(cmd pb.Command) error {
 		ct.logs[cur].logged = true
 	}
 
-	if wrt {
+	if cmd.WriteOp {
 		// update current state for that particular key
-		st := State{
-			ind: cmd.Id,
-			cmd: cmd,
-		}
-		ct.views[cur][cmd.Key] = st
+		ct.views[cur][cmd.Key] = cmd
 	}
 	// adjust last index
 	ct.logs[cur].last = cmd.Id
@@ -211,9 +204,9 @@ func (ct *ConcTable) Log(cmd pb.Command) error {
 // the entire reduced log is always returned. On persistent configuration (i.e.
 // 'inmem' false) the entire log is loaded and then unmarshaled, consider using
 // 'RecovBytes' calls instead. On CircBuff structures, indexes [p, n] are ignored.
-func (ct *ConcTable) Recov(p, n uint64) ([]pb.Command, error) {
+func (ct *ConcTable) Recov(p, n uint64) ([]*pb.Entry, error) {
 	if n < p {
-		return nil, errors.New("invalid interval request, 'n' must be >= 'p'")
+		return nil, ErrInvalidRecovInterval
 	}
 	cur := ct.readAndAdvanceCurrentView()
 
@@ -223,7 +216,7 @@ func (ct *ConcTable) Recov(p, n uint64) ([]pb.Command, error) {
 		return nil, err
 	}
 
-	var cmds []pb.Command
+	var cmds []*pb.Entry
 	if exec {
 		defer ct.mu[cur].Unlock()
 
@@ -251,7 +244,7 @@ func (ct *ConcTable) Recov(p, n uint64) ([]pb.Command, error) {
 // the size of each command is binary encoded before the raw pbuff.
 func (ct *ConcTable) RecovBytes(p, n uint64) ([]byte, error) {
 	if n < p {
-		return nil, errors.New("invalid interval request, 'n' must be >= 'p'")
+		return nil, ErrInvalidRecovInterval
 	}
 	cur := ct.readAndAdvanceCurrentView()
 
@@ -553,15 +546,15 @@ func (ct *ConcTable) resetViewState(id int) {
 
 // executeReduceAlgOnView applies the iterative compaction algorithm on a conflict-free view,
 // mutual exclusion is done by outer scope.
-func (ct *ConcTable) executeReduceAlgOnView(id int) []pb.Command {
+func (ct *ConcTable) executeReduceAlgOnView(id int) []*pb.Entry {
 	return iterReduceAlg(&ct.views[id])
 }
 
-// iterReduceAlg execute iterative compaction algorithm over a minTable structure.
-func iterReduceAlg(tbl *stateTable) []pb.Command {
-	log := []pb.Command{}
-	for _, st := range *tbl {
-		log = append(log, st.cmd)
+// iterReduceAlg execute iterative compaction algorithm over a stateTable structure.
+func iterReduceAlg(tbl *stateTable) []*pb.Entry {
+	log := make([]*pb.Entry, 0, len(*tbl))
+	for _, c := range *tbl {
+		log = append(log, c)
 	}
 	return log
 }
