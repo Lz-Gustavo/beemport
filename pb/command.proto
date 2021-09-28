@@ -1,6 +1,9 @@
 syntax = "proto3";
 package pb;
 
+// NOTE: Command represents the deprecated format previously utilized by beemport.
+// Kept only for backward compatibility.
+
 message Command {
 	uint64 Id = 1;
 	string Ip = 2;
