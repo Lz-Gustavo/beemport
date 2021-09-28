@@ -3,6 +3,7 @@ package beemport
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,6 +14,8 @@ import (
 	"github.com/Lz-Gustavo/beemport/pb"
 	"github.com/golang/protobuf/proto"
 )
+
+var ErrSecondaryDiskWrite = errors.New("cannot persist to secondary disk if ParallelIO is unset")
 
 // logData is the general data for each implementation of Structure interface
 type logData struct {
@@ -73,7 +76,7 @@ func (ld *logData) updateLogState(lg []*pb.Entry, p, n uint64, secDisk bool) err
 	fn := ld.config.Fname
 	if secDisk {
 		if !ld.config.ParallelIO {
-			return fmt.Errorf("can not persist to secondary disk if ParallelIO is unset")
+			return ErrSecondaryDiskWrite
 		}
 		fn = ld.config.SecondFname
 	}

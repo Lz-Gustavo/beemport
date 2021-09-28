@@ -55,6 +55,7 @@ func createRandomLog(n uint64, dif, wrt int, out chan<- *pb.Entry) {
 		// WRITE operation
 		if cn := r.Intn(100); cn < wrt {
 			cmd.WriteOp = true
+			cmd.Command = generateRandByteSlice()
 		}
 		out <- &cmd
 	}
@@ -64,18 +65,12 @@ func createRandomLog(n uint64, dif, wrt int, out chan<- *pb.Entry) {
 }
 
 func splitIntoWorkers(src <-chan *pb.Entry, wrks ...chan<- *pb.Entry) {
-	for {
-		select {
-		case cmd, ok := <-src:
-			if !ok {
-				return
-			}
-			for _, ch := range wrks {
-				// avoid blocking receive on the sync ch
-				go func(dest chan<- *pb.Entry, c *pb.Entry) {
-					dest <- c
-				}(ch, cmd)
-			}
+	for cmd := range src {
+		for _, ch := range wrks {
+			// avoid blocking receive on the sync ch
+			go func(dest chan<- *pb.Entry, c *pb.Entry) {
+				dest <- c
+			}(ch, cmd)
 		}
 	}
 }
@@ -86,25 +81,17 @@ func runConcTable(log <-chan *pb.Entry, n uint64, mu *sync.Mutex, wg *sync.WaitG
 	defer wg.Done()
 
 	start := time.Now()
-	for {
-		select {
-		case cmd, ok := <-log:
-			if !ok {
-				return
-			}
+	for cmd := range log {
+		if i < n {
+			ct.Log(cmd)
+			i++
 
-			if i < n {
-				ct.Log(cmd)
-				i++
-
-			} else {
-				// finished logging
-				goto BREAK
-			}
+		} else {
+			// finished logging
+			break
 		}
 	}
 
-BREAK:
 	// elapsed time to interpret the sequence of commands and construct the tree struct
 	construct := time.Since(start)
 
@@ -144,25 +131,17 @@ func runTraditionalLog(log <-chan *pb.Entry, n uint64, mu *sync.Mutex, wg *sync.
 	defer wg.Done()
 
 	start := time.Now()
-	for {
-		select {
-		case cmd, ok := <-log:
-			if !ok {
-				return
-			}
+	for cmd := range log {
+		if i < n {
+			logfile = append(logfile, cmd)
+			i++
 
-			if i < n {
-				logfile = append(logfile, cmd)
-				i++
-
-			} else {
-				// finished logging
-				goto BREAK
-			}
+		} else {
+			// finished logging
+			break
 		}
 	}
 
-BREAK:
 	construct := time.Since(start)
 	fn := "traditionallog-bench.out"
 

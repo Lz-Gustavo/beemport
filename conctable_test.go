@@ -18,6 +18,10 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
+const (
+	defaultSizeOnCommandBytes = 32
+)
+
 func TestConcTableLog(t *testing.T) {
 	first := uint64(1)
 	n := uint64(1000)
@@ -25,8 +29,14 @@ func TestConcTableLog(t *testing.T) {
 
 	// populate some SET commands
 	for i := first; i < n; i++ {
-		err := ct.Log(&pb.Entry{Id: i, WriteOp: true, Key: strconv.Itoa(int(i))})
-		if err != nil {
+		cmd := &pb.Entry{
+			Id:      i,
+			WriteOp: true,
+			Key:     strconv.Itoa(int(i)),
+			Command: generateRandByteSlice(),
+		}
+
+		if err := ct.Log(cmd); err != nil {
 			t.Log(err.Error())
 			t.FailNow()
 		}
@@ -129,7 +139,7 @@ func TestConcTableDifferentRecoveries(t *testing.T) {
 
 		// the compacted log used for later comparison
 		view := ct.retrieveCurrentViewCopy()
-		redLog := iterReduceAlg(&view)
+		redLog := generateLogFromTable(&view)
 
 		// wait for new state attribution on concurrent structures.
 		time.Sleep(time.Second)
@@ -194,7 +204,7 @@ func TestConcTableRecovBytesInterpretation(t *testing.T) {
 
 		// the compacted log used for later comparison
 		view := ct.retrieveCurrentViewCopy()
-		redLog := iterReduceAlg(&view)
+		redLog := generateLogFromTable(&view)
 
 		// wait for new state attribution on concurrent structures...
 		time.Sleep(time.Second)
@@ -238,8 +248,6 @@ func TestConcTableRecovBytesInterpretation(t *testing.T) {
 
 func TestConcTableRecovEntireLog(t *testing.T) {
 	nCmds, wrt, dif := uint64(2000), 50, 100
-	concRecov := false
-
 	cfgs := []LogConfig{
 		{
 			Inmem:   false,
@@ -266,52 +274,20 @@ func TestConcTableRecovEntireLog(t *testing.T) {
 			t.FailNow()
 		}
 
-		if concRecov {
-			ch, num, err := ct.RecovEntireLogConc()
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-			fmt.Println("now reading ch...")
-
-			for {
-				raw, ok := <-ch
-				if !ok { // closed ch
-					fmt.Println("closed!")
-					break
-				}
-				fmt.Println("got one, deserializing")
-
-				log, err := deserializeRawLogStream(raw, num)
-				if err == io.EOF {
-					t.Log("empty log")
-					t.Fail()
-
-				} else if err != nil {
-					t.Log("error while deserializing log, err:", err.Error())
-					t.FailNow()
-				}
-
-				t.Log("got one log:", log)
-				// TODO: test log...
-			}
-
-		} else {
-			raw, num, err := ct.RecovEntireLog()
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-
-			log, err := deserializeRawLogStream(raw, num)
-			if err != nil {
-				t.Log(err.Error())
-				t.FailNow()
-			}
-
-			t.Log("got log:", log)
-			// TODO: test log...
+		raw, num, err := ct.RecovEntireLog()
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
 		}
+
+		log, err := deserializeRawLogStream(raw, num)
+		if err != nil {
+			t.Log(err.Error())
+			t.FailNow()
+		}
+
+		t.Log("got log:", log)
+		// TODO: test log...
 	}
 
 	if err := cleanAllLogStates(); err != nil {
@@ -429,6 +405,7 @@ func generateRandConcTable(n uint64, wrt, dif int, cfg *LogConfig) (*ConcTable, 
 				Id:      i,
 				Key:     strconv.Itoa(r.Intn(dif)),
 				WriteOp: true,
+				Command: generateRandByteSlice(),
 			}
 
 		} else {
@@ -659,4 +636,10 @@ func min(a, b uint64) uint64 {
 		return a
 	}
 	return b
+}
+
+func generateRandByteSlice() []byte {
+	buf := make([]byte, defaultSizeOnCommandBytes)
+	rand.Read(buf)
+	return buf
 }

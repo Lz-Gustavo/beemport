@@ -1,7 +1,6 @@
 package beemport
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -47,10 +46,10 @@ type stateTable map[string]*pb.Entry
 
 // ConcTable ...
 type ConcTable struct {
-	views []stateTable
-	mu    []sync.Mutex
-	logs  []logData
-	canc  context.CancelFunc
+	views  []stateTable
+	mu     []sync.Mutex
+	logs   []logData
+	cancel context.CancelFunc
 
 	concLevel int
 	loggerReq chan logEvent
@@ -67,7 +66,7 @@ type ConcTable struct {
 func NewConcTable(ctx context.Context) *ConcTable {
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
-		canc:      cancel,
+		cancel:    cancel,
 		loggerReq: make(chan logEvent, loggerChanBuffSize),
 		concLevel: defaultConcLvl,
 
@@ -100,7 +99,7 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 
 	c, cancel := context.WithCancel(ctx)
 	ct := &ConcTable{
-		canc:      cancel,
+		cancel:    cancel,
 		loggerReq: make(chan logEvent, loggerChanBuffSize),
 		concLevel: concLvl,
 
@@ -130,12 +129,6 @@ func NewConcTableWithConfig(ctx context.Context, concLvl int, cfg *LogConfig) (*
 		go ct.handleReduce(c, true)
 	}
 	return ct, nil
-}
-
-// Str ...
-func (ct *ConcTable) Str() string {
-	// TODO:
-	return ""
 }
 
 // Len returns the length of the current active view. A structure lenght
@@ -316,83 +309,10 @@ func (ct *ConcTable) RecovEntireLog() ([]byte, int, error) {
 	return buf.Bytes(), len(fs), nil
 }
 
-// RecovEntireLogConc ...
-// TODO: comeback later once sequential solution is done.
-func (ct *ConcTable) RecovEntireLogConc() (<-chan []byte, int, error) {
-	fp := ct.logFolder + "*.log"
-	fs, err := filepath.Glob(fp)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// sorts by lenght and lexicographically for equal len
-	sort.Sort(byLenAlpha(fs))
-	buf := bytes.NewBuffer(nil)
-	mu := &sync.Mutex{}
-
-	wg := sync.WaitGroup{}
-	wg.Add(len(fs))
-	fmt.Println("will be waiting on", len(fs), "files")
-
-	for _, f := range fs {
-		// read each file concurrently and write to buffer once done
-		go func(fn string) {
-			fd, err := os.OpenFile(fn, os.O_RDONLY, 0400)
-			if err != nil && err != io.EOF {
-				log.Fatalf("failed while opening log '%s', err: '%s'\n", fn, err.Error())
-			}
-			defer fd.Close()
-
-			// read the retrieved log interval
-			var f, l uint64
-			_, err = fmt.Fscanf(fd, "%d\n%d\n", &f, &l)
-			if err != nil {
-				log.Fatalf("failed while reading log '%s', err: '%s'\n", fn, err.Error())
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			// increase buffer's capacity, if necessary
-			if size := int(l - f); size >= (buf.Cap() - buf.Len()) {
-				buf.Grow(size)
-			}
-
-			// reset cursor
-			_, err = fd.Seek(0, io.SeekStart)
-			if err != nil {
-				log.Fatalf("failed while reading log '%s', err: '%s'\n", fn, err.Error())
-			}
-
-			// each copy stages through a temporary buffer, copying to dest once completed
-			_, err = io.Copy(buf, fd)
-			if err != nil {
-				log.Fatalf("failed while copying log '%s', err: '%s'\n", fn, err.Error())
-			}
-
-			wg.Done()
-			fmt.Println("finished one...")
-		}(f)
-	}
-
-	wg.Wait()
-	fmt.Println("finished reading logs!")
-
-	out := make(chan []byte)
-	sc := bufio.NewScanner(buf)
-	go func() {
-		for sc.Scan() {
-			out <- sc.Bytes()
-		}
-		close(out)
-	}()
-	return out, len(fs), nil
-}
-
 // persistTable applies the configured algorithm on a specific view and updates
 // the latest log state into a new file.
 func (ct *ConcTable) persistTable(id int, secDisk bool) error {
-	cmds := ct.executeReduceAlgOnView(id)
+	cmds := generateLogFromTable(&ct.views[id])
 	return ct.logs[id].updateLogState(cmds, ct.logs[id].first, ct.logs[id].last, secDisk)
 }
 
@@ -457,22 +377,6 @@ func (ct *ConcTable) readAndAdvanceCurrentView() int {
 func (ct *ConcTable) advanceCurrentView() {
 	d := (ct.cursor - ct.concLevel + 1)
 	ct.cursor = modInt(d, ct.concLevel)
-}
-
-// mayTriggerReduceOnView possibly triggers the reduce algorithm over the informed view
-// based on config params (e.g. interval period reached).
-func (ct *ConcTable) mayTriggerReduceOnView(id int) {
-	if ct.logs[id].config.Tick != Interval {
-		return
-	}
-	ct.logs[id].count++
-
-	// reached reduce period or immediately config
-	if ct.logs[id].count >= ct.logs[id].config.Period {
-		ct.logs[id].count = 0
-		// trigger reduce on view
-		ct.loggerReq <- logEvent{id, -1}
-	}
 }
 
 // willRequireReduceOnView informs if a reduce procedure will later be trigged on a log procedure,
@@ -544,28 +448,23 @@ func (ct *ConcTable) resetViewState(id int) {
 	ct.logs[id].logged = false
 }
 
-// executeReduceAlgOnView applies the iterative compaction algorithm on a conflict-free view,
-// mutual exclusion is done by outer scope.
-func (ct *ConcTable) executeReduceAlgOnView(id int) []*pb.Entry {
-	return iterReduceAlg(&ct.views[id])
+// Shutdown ...
+func (ct *ConcTable) Shutdown() {
+	ct.cancel()
+	if ct.isMeasuringLat {
+		ct.latMeasure.flush()
+		ct.latMeasure.close()
+	}
 }
 
-// iterReduceAlg execute iterative compaction algorithm over a stateTable structure.
-func iterReduceAlg(tbl *stateTable) []*pb.Entry {
+// generateLogFromTable applies the iterative compaction algorithm on a conflict-free view,
+// mutual exclusion is done by outer scope.
+func generateLogFromTable(tbl *stateTable) []*pb.Entry {
 	log := make([]*pb.Entry, 0, len(*tbl))
 	for _, c := range *tbl {
 		log = append(log, c)
 	}
 	return log
-}
-
-// Shutdown ...
-func (ct *ConcTable) Shutdown() {
-	ct.canc()
-	if ct.isMeasuringLat {
-		ct.latMeasure.flush()
-		ct.latMeasure.close()
-	}
 }
 
 // computes the modulu operation, returning the dividend signal result. In all cases
@@ -577,13 +476,6 @@ func modInt(a, b int) int {
 		return a
 	}
 	return a + b
-}
-
-func applyConcIndexInFname(fn string, id int) string {
-	ind := strconv.Itoa(id)
-	sep := strings.SplitAfter(fn, ".")
-	sep[len(sep)-1] = ind + ".log"
-	return strings.Join(sep, "")
 }
 
 // extractLocation returns the folder location specified in 'fn', searching for the

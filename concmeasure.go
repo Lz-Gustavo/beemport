@@ -17,6 +17,10 @@ const (
 	initArraySize = 10000000
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 // latencyMeasure holds auxiliar variables to implement an in-deep latency analysis
 // on ConcTable operations.
 type latencyMeasure struct {
