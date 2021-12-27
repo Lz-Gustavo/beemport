@@ -130,7 +130,7 @@ func TestConcTableDifferentRecoveries(t *testing.T) {
 		// prohibits the generation of an unique log file for all configs. An
 		// unique log is not needed on a unit test scenario, since the idea is
 		// not to compare these strategies, only tests its correctness.
-		ct, err = generateRandConcTable(nCmds, wrt, dif, &cf)
+		ct, err = generateRandConcTable(nCmds, wrt, dif, cf)
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -195,7 +195,7 @@ func TestConcTableRecovBytesInterpretation(t *testing.T) {
 		var ct *ConcTable
 		var err error
 
-		ct, err = generateRandConcTable(nCmds, wrt, dif, &cf)
+		ct, err = generateRandConcTable(nCmds, wrt, dif, cf)
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -268,7 +268,7 @@ func TestConcTableRecovEntireLog(t *testing.T) {
 			t.FailNow()
 		}
 
-		ct, err = generateRandConcTable(nCmds, wrt, dif, &cf)
+		ct, err = generateRandConcTable(nCmds, wrt, dif, cf)
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -330,7 +330,7 @@ func TestConcTableLatencyMeasurementAndSync(t *testing.T) {
 		}
 
 		// latency is already recorded while being generated
-		ct, err := generateRandConcTable(nCmds, wrt, dif, &cf)
+		ct, err := generateRandConcTable(nCmds, wrt, dif, cf)
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -364,7 +364,7 @@ func TestConcTableParallelIO(t *testing.T) {
 
 	for _, cf := range cfgs {
 		// log files should be interchanged between primary and second fns
-		_, err := generateRandConcTable(nCmds, wrt, dif, &cf)
+		_, err := generateRandConcTable(nCmds, wrt, dif, cf)
 		if err != nil {
 			t.Log(err.Error())
 			t.FailNow()
@@ -394,19 +394,15 @@ func TestConcTableParallelIO(t *testing.T) {
 	}
 }
 
-func generateRandConcTable(n uint64, wrt, dif int, cfg *LogConfig) (*ConcTable, error) {
+func generateRandConcTable(n uint64, wrt, dif int, cfg LogConfig) (*ConcTable, error) {
 	srand := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(srand)
 	var ct *ConcTable
 	var err error
 
-	if cfg == nil {
-		ct = NewConcTable(context.TODO())
-	} else {
-		ct, err = NewConcTableWithConfig(context.TODO(), defaultConcLvl, cfg)
-		if err != nil {
-			return nil, err
-		}
+	ct, err = NewConcTableWithConfig(context.TODO(), defaultConcLvl, &cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	for i := uint64(0); i < n; i++ {

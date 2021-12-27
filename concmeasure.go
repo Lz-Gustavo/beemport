@@ -14,7 +14,8 @@ const (
 	// recorded.
 	measureChance int = 1
 
-	initArraySize = 10000000
+	// 1kk measurements on 4 arrays of 64bits values, 32MB total
+	initArraySize = 1000000
 )
 
 func init() {
@@ -29,10 +30,6 @@ type latencyMeasure struct {
 	msrIndex int
 	interval int
 	outFile  *os.File
-
-	counter    int
-	fillState  int
-	perstState int
 
 	initLat  [initArraySize]int64
 	writeLat [initArraySize]int64
@@ -94,37 +91,6 @@ func (lm *latencyMeasure) notifyTablePersistence(msrIndex int) {
 	lm.perstLat[msrIndex] = time.Now().UnixNano()
 }
 
-// notifyReceivedCommandV2 measures the received timestamp of any command within the
-// configured batch, and not only on the first command. This behavior differs from
-// notifyReceivedCommand() and its utilized as a server-side latency measurement instead
-// of conctable evaluation.
-func (lm *latencyMeasure) notifyReceivedCommandV2() {
-
-	// TODO: detected race condition on these invocations, which leads to two different
-	// routines being able to call notifyReceivedCommandV2() before any notifyCommandWriteV2()
-	// call, causing an overwrite on the initLat array. Fix it after tests!!!
-	lm.initLat[lm.counter] = time.Now().UnixNano()
-}
-
-func (lm *latencyMeasure) notifyCommandWriteV2() {
-	lm.writeLat[lm.counter] = time.Now().UnixNano()
-	lm.counter++
-}
-
-func (lm *latencyMeasure) notifyTableFillV2() {
-	for i := lm.fillState; i < lm.counter; i++ {
-		lm.fillLat[i] = time.Now().UnixNano()
-	}
-	lm.fillState = lm.counter
-}
-
-func (lm *latencyMeasure) notifyTablePersistenceV2() {
-	for i := lm.perstState; i < lm.counter; i++ {
-		lm.perstLat[i] = time.Now().UnixNano()
-	}
-	lm.perstState = lm.counter
-}
-
 func (lm *latencyMeasure) flush() error {
 	var err error
 	buff := bytes.NewBuffer(nil)
@@ -134,13 +100,21 @@ func (lm *latencyMeasure) flush() error {
 		f := lm.fillLat[i]
 		p := lm.perstLat[i]
 
-		// got the maximum number of unique-size tuples
-		if init == 0 || w == 0 || f == 0 || p == 0 {
+		// got the maximum number of unique-size tuples, since p is always the last
+		// one to be written
+		if p == 0 {
 			break
 		}
 
-		_, err = fmt.Fprintf(buff, "%d,%d,%d,%d\n", init, w, f, p)
-		if err != nil {
+		// measure only p if other values are not present
+		if init == 0 || w == 0 || f == 0 {
+			if _, err = fmt.Fprintf(buff, "%d\n", p); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if _, err = fmt.Fprintf(buff, "%d,%d,%d,%d\n", init, w, f, p); err != nil {
 			return err
 		}
 	}

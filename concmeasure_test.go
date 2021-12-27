@@ -1,7 +1,9 @@
 package beemport
 
 import (
+	"bufio"
 	"context"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -9,20 +11,22 @@ import (
 	"github.com/Lz-Gustavo/beemport/pb"
 )
 
-func TestLatencyMeasurementV2(t *testing.T) {
-	first := uint64(0)
-	n := uint64(100)
+const latencyMeasurementFn = "./measure.log"
+
+func TestMeasurementOnLogAndMeasureLat(t *testing.T) {
+	first, n := uint64(0), uint64(100)
+	period := uint32(10)
 	cfg := &LogConfig{
 		Inmem:        false,
 		KeepAll:      true,
 		Tick:         Interval,
-		Period:       10,
+		Period:       period,
 		Fname:        "./logstate.log",
 		Measure:      true,
-		MeasureFname: "./measure.log",
+		MeasureFname: latencyMeasurementFn,
 	}
 
-	ct, err := NewConcTableWithConfig(context.TODO(), 2, cfg)
+	ct, err := NewConcTableWithConfig(context.TODO(), defaultConcLvl, cfg)
 	if err != nil {
 		t.Fatal("could not init conctable structure, err:", err.Error())
 	}
@@ -35,27 +39,40 @@ func TestLatencyMeasurementV2(t *testing.T) {
 			Command: generateRandByteSlice(),
 		}
 
-		if err := ct.LogAndMeasureLat(cmd, true); err != nil {
+		if _, err := ct.LogAndMeasureLat(cmd, true); err != nil {
 			t.Fatal(err.Error())
 		}
 	}
 
 	// wait for table persistence
 	time.Sleep(time.Second)
+	ct.Shutdown()
 
-	if ct.latMeasure.counter < int(n) {
-		t.Fatalf("measured a different number of logged commands: %d instead of %d", ct.latMeasure.counter, n)
+	count, err := countRecordsOnMeasureFile()
+	if err != nil {
+		t.Fatal(err.Error())
 	}
 
-	if ct.latMeasure.fillState != ct.latMeasure.counter {
-		t.Fatalf("different fill state observed: %d instead of %d", ct.latMeasure.fillState, ct.latMeasure.counter)
-	}
-
-	if ct.latMeasure.perstState != ct.latMeasure.counter {
-		t.Fatalf("different perst state observed: %d instead of %d", ct.latMeasure.perstState, ct.latMeasure.counter)
+	if count*int(period) != int(n) {
+		t.Fatalf("measured a different number of persisted intervals: %d instead of %d", count*int(period), n)
 	}
 
 	if err := cleanAllLogStates(); err != nil {
 		t.Fatal(err.Error())
 	}
+}
+
+func countRecordsOnMeasureFile() (int, error) {
+	fd, err := os.Open(latencyMeasurementFn)
+	if err != nil {
+		return -1, err
+	}
+	defer fd.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(fd)
+	for scanner.Scan() {
+		count++
+	}
+	return count, nil
 }
