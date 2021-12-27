@@ -300,13 +300,24 @@ func TestConcTableLatencyMeasurementAndSync(t *testing.T) {
 	nCmds, wrt, dif := uint64(2000), 50, 100
 	cfgs := []LogConfig{
 		{
-			Inmem:   false,
-			KeepAll: true,
-			Sync:    true,
-			Measure: true,
-			Tick:    Interval,
-			Period:  200,
-			Fname:   "./logstate.log",
+			Inmem:        false,
+			KeepAll:      true,
+			Sync:         true,
+			Measure:      true,
+			MeasureFname: "./measure.log",
+			Tick:         Interval,
+			Period:       200,
+			Fname:        "./logstate.log",
+		},
+		{
+			Inmem:        false,
+			KeepAll:      true,
+			Sync:         true,
+			Measure:      true,
+			MeasureFname: "./measure.log",
+			Tick:         Interval,
+			Period:       1,
+			Fname:        "./logstate.log",
 		},
 	}
 

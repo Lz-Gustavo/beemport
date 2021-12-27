@@ -203,7 +203,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 
 	// first command
 	if mustMeasureLat {
-		ct.latMeasure.notifyReceivedCommandETCD()
+		ct.latMeasure.notifyReceivedCommandV2()
 	}
 
 	willReduce, advance := ct.willRequireReduceOnView(cmd.WriteOp, cur)
@@ -216,7 +216,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	ct.cursorMu.Unlock()
 
 	if mustMeasureLat {
-		ct.latMeasure.notifyCommandWriteETCD()
+		ct.latMeasure.notifyCommandWriteV2()
 	}
 
 	// adjust first structure index
@@ -235,7 +235,7 @@ func (ct *ConcTable) LogAndMeasureLat(cmd *pb.Entry, mustMeasureLat bool) error 
 	if willReduce {
 		// mutext will be later unlocked by the logger routine
 		if mustMeasureLat {
-			ct.latMeasure.notifyTableFillETCD()
+			ct.latMeasure.notifyTableFillV2()
 			ct.loggerReq <- logEvent{cur, 0}
 
 		} else {
@@ -412,7 +412,7 @@ func (ct *ConcTable) handleReduce(ctx context.Context, secDisk bool) {
 			}
 
 			if event.measure == 0 {
-				ct.latMeasure.notifyTablePersistenceETCD()
+				ct.latMeasure.notifyTablePersistenceV2()
 				break
 			}
 

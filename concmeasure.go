@@ -90,31 +90,35 @@ func (lm *latencyMeasure) notifyTableFill() {
 	lm.drawn = false
 }
 
-func (lm *latencyMeasure) notifyTablePersistence(tableID int) {
-	lm.perstLat[tableID] = time.Now().UnixNano()
+func (lm *latencyMeasure) notifyTablePersistence(msrIndex int) {
+	lm.perstLat[msrIndex] = time.Now().UnixNano()
 }
 
-// notifyReceivedCommandETCD measures the received timestamp of any command within the
+// notifyReceivedCommandV2 measures the received timestamp of any command within the
 // configured batch, and not only on the first command. This behavior differs from
 // notifyReceivedCommand() and its utilized as a server-side latency measurement instead
 // of conctable evaluation.
-func (lm *latencyMeasure) notifyReceivedCommandETCD() {
+func (lm *latencyMeasure) notifyReceivedCommandV2() {
+
+	// TODO: detected race condition on these invocations, which leads to two different
+	// routines being able to call notifyReceivedCommandV2() before any notifyCommandWriteV2()
+	// call, causing an overwrite on the initLat array. Fix it after tests!!!
 	lm.initLat[lm.counter] = time.Now().UnixNano()
 }
 
-func (lm *latencyMeasure) notifyCommandWriteETCD() {
+func (lm *latencyMeasure) notifyCommandWriteV2() {
 	lm.writeLat[lm.counter] = time.Now().UnixNano()
 	lm.counter++
 }
 
-func (lm *latencyMeasure) notifyTableFillETCD() {
+func (lm *latencyMeasure) notifyTableFillV2() {
 	for i := lm.fillState; i < lm.counter; i++ {
 		lm.fillLat[i] = time.Now().UnixNano()
 	}
 	lm.fillState = lm.counter
 }
 
-func (lm *latencyMeasure) notifyTablePersistenceETCD() {
+func (lm *latencyMeasure) notifyTablePersistenceV2() {
 	for i := lm.perstState; i < lm.counter; i++ {
 		lm.perstLat[i] = time.Now().UnixNano()
 	}
