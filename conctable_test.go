@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Lz-Gustavo/beemport/pb"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
