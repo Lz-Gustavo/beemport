@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"testing"
 	"time"
 
@@ -32,7 +31,7 @@ func TestConcTableLog(t *testing.T) {
 		cmd := &pb.Entry{
 			Id:      i,
 			WriteOp: true,
-			Key:     strconv.Itoa(int(i)),
+			Key:     int64(i),
 			Command: generateRandByteSlice(),
 		}
 
@@ -410,7 +409,7 @@ func generateRandConcTable(n uint64, wrt, dif int, cfg LogConfig) (*ConcTable, e
 		if cn := r.Intn(100); cn < wrt {
 			cmd = pb.Entry{
 				Id:      i,
-				Key:     strconv.Itoa(r.Intn(dif)),
+				Key:     int64(r.Intn(dif)),
 				WriteOp: true,
 				Command: generateRandByteSlice(),
 			}
@@ -550,8 +549,8 @@ func logsAreEquivalent(logA, logB []*pb.Entry) bool {
 
 	// apply each log on a hash table, checking if they have the same
 	// values for the same keys
-	htA := make(map[string][]byte)
-	htB := make(map[string][]byte)
+	htA := make(map[int64][]byte)
+	htB := make(map[int64][]byte)
 
 	for i := range logA {
 		htA[logA[i].Key] = logA[i].Command
@@ -575,8 +574,8 @@ func logsAreEquivalent(logA, logB []*pb.Entry) bool {
 //   (i)  'x' and 'y' operate over the same underlying key (i.e. 'x.Key' == 'y.Key') AND
 //   (ii) 'x' has a higher index than 'y' (i.e. 'x.Ind' > 'y.Ind')
 func logsAreOnlyDelayed(logA, logB []*pb.Entry) bool {
-	htA := make(map[string]uint64)
-	htB := make(map[string]uint64)
+	htA := make(map[int64]uint64)
+	htB := make(map[int64]uint64)
 
 	// apply both logs on a hash table
 	for i := range logA {

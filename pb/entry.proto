@@ -3,7 +3,7 @@ package pb;
 
 message Entry {
 	uint64 Id     = 1;
-	string Key    = 2;
+	int64 Key     = 2;
 	bool WriteOp  = 3;
 	bytes Command = 4;
 }

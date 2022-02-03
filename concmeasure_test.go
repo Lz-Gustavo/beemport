@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -35,7 +34,7 @@ func TestMeasurementOnLogAndMeasureLat(t *testing.T) {
 		cmd := &pb.Entry{
 			Id:      i,
 			WriteOp: true,
-			Key:     strconv.Itoa(int(i)),
+			Key:     int64(i),
 			Command: generateRandByteSlice(),
 		}
 

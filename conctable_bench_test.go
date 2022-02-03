@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +48,7 @@ func createRandomLog(n uint64, dif, wrt int, out chan<- *pb.Entry) {
 	for i := uint64(0); i < n; i++ {
 		cmd := pb.Entry{
 			Id:  i,
-			Key: strconv.Itoa(r.Intn(dif)),
+			Key: int64(r.Intn(dif)),
 		}
 
 		// WRITE operation
@@ -177,7 +176,7 @@ func dumpLogIntoFile(folder, name string, log []*pb.Entry) error {
 	defer out.Close()
 
 	for _, cmd := range log {
-		_, err = fmt.Fprintf(out, "%v %s %v\n", cmd.WriteOp, cmd.Key, cmd.Command)
+		_, err = fmt.Fprintf(out, "%v %d %v\n", cmd.WriteOp, cmd.Key, cmd.Command)
 		if err != nil {
 			return err
 		}
